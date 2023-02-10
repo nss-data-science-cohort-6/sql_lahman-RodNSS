@@ -1,16 +1,21 @@
 -- 1. Find all players in the database who played at Vanderbilt University. Create a list showing each player's first and last names as well as the total salary they earned in the major leagues. Sort this list in descending order by the total salary earned. Which Vanderbilt player earned the most money in the majors?
 
-SELECT namegiven, SUM(salary) as total_salary
+SELECT namefirst,
+	   namelast,
+       SUM(salary)::numeric::money AS total_salary
 FROM people
-JOIN collegeplaying 
-USING(playerid)
-JOIN salaries 
-USING(playerid)
+INNER JOIN (
+SELECT DISTINCT playerid
+FROM collegeplaying
 WHERE schoolid = 'vandy'
-GROUP BY namegiven
+) AS v
+USING(playerid)
+INNER JOIN salaries
+USING(playerid)
+GROUP BY playerid, namefirst, namelast
 ORDER BY total_salary DESC;
 
--- David Taylor earned the most money with $245,553,888.
+-- David Price earned the most money with $81,851,296.00
 
 -- 2. Using the fielding table, group players into three groups based on their position: label players with position OF as "Outfield", those with position "SS", "1B", "2B", and "3B" as "Infield", and those with position "P" or "C" as "Battery". Determine the number of putouts made by each of these three groups in 2016.
 
@@ -19,28 +24,119 @@ SELECT
        WHEN pos IN ('SS', '1B', '2B', '3B') THEN 'Infield'
        WHEN pos IN ('P', 'C') THEN 'Battery'
   	   END AS position,
-SUM(CASE WHEN yearid = 2016 THEN po ELSE 0 END) AS putouts_2016
+  SUM(po) AS putouts_2016
 FROM fielding
+WHERE yearid = 2016
 GROUP BY position;
 
 
 -- 3. Find the average number of strikeouts per game by decade since 1920. Round the numbers you report to 2 decimal places. Do the same for home runs per game. Do you see any trends? (Hint: For this question, you might find it helpful to look at the **generate_series** function (https://www.postgresql.org/docs/9.1/functions-srf.html). If you want to see an example of this in action, check out this DataCamp video: https://campus.datacamp.com/courses/exploratory-data-analysis-in-sql/summarizing-and-aggregating-numeric-data?ex=6)
 
-SELECT (start_year) AS decade_start,
-  ROUND(AVG(so / g),2) AS avg_strikeouts_pg,
-  ROUND(AVG(hr / g),2) AS avg_home_runs_pg
-FROM (
-  
-  SELECT generate_series(1920, 2020, 10) AS start_year
-
--- The average number of strikeouts has a steady increase over time whereas the the avg home runs seems more random at first, then large jump starting around 2000. Steroids maybe?
-
-
+SELECT 
+  (yearid / 10) * 10 AS decade_start,
+  ROUND(AVG(so / g),2) AS avg_strikeouts,
+  ROUND(AVG(hr / g),2) AS avg_homeruns
+FROM teams
+WHERE yearid >= 1920 AND yearid <= 2016
+GROUP BY decade_start
+ORDER BY decade_start;
+	
 -- 4. Find the player who had the most success stealing bases in 2016, where __success__ is measured as the percentage of stolen base attempts which are successful. (A stolen base attempt results either in a stolen base or being caught stealing.) Consider only players who attempted _at least_ 20 stolen bases. Report the players' names, number of stolen bases, number of attempts, and stolen base percentage.
 
--- 5. From 1970 to 2016, what is the largest number of wins for a team that did not win the world series? What is the smallest number of wins for a team that did win the world series? Doing this will probably result in an unusually small number of wins for a world series champion; determine why this is the case. Then redo your query, excluding the problem year. How often from 1970 to 2016 was it the case that a team with the most wins also won the world series? What percentage of the time?
+WITH stolen_bases AS (
+  SELECT playerid, sb, cs, ROUND(sb * 1.0 / (sb + cs),2) AS success
+  FROM batting
+  WHERE yearid = 2016 AND sb + cs >= 20
+)
+SELECT namefirst,
+	   namelast,
+	   sb, 
+	   sb + cs AS attempts, 
+	   success
+FROM stolen_bases
+JOIN people 
+USING(playerid)
+ORDER BY success DESC
+LIMIT 1;
+
+-- Chris Owings had the most success with 21/23 stolen bases or 91%
+
+-- 5. From 1970 to 2016, what is the largest number of wins for a team that did not win the world series? What is the smallest number of wins for a team that did win the world series? Doing this will probably result in an unusually small number of wins for a world series champion; determine why this is the case. Then redo your query, excluding the problem year. 
+
+SELECT
+  MAX(CASE WHEN wswin = 'N' THEN w END) AS most_wins_no_ws,
+  MIN(CASE WHEN wswin = 'Y' THEN w END) AS least_wins_ws
+FROM teams
+WHERE yearid BETWEEN 1970 AND 2016;
+
+-- 116 is the largest number of wins for a team that did not win the world series while 63 is the smallest number of wins for a team that did win the world series. 
+
+-- How often from 1970 to 2016 was it the case that a team with the most wins also won the world series? What percentage of the time?
+
+SELECT SUM(CASE WHEN t.w = (SELECT MAX(w) 
+							FROM teams WHERE yearid = t.yearid 
+							AND yearid != 1994) AND t.wswin = 'Y' 
+		                    THEN 1 ELSE 0 END) AS total_years
+FROM teams AS t
+WHERE t.yearid BETWEEN 1970 AND 2016 AND t.yearid != 1994;
+
+-- 12 years
+
+SELECT
+	ROUND(100.0 * COUNT(*)/ (SELECT COUNT(DISTINCT yearid)
+	FROM teams WHERE yearid BETWEEN 1970 AND 2016
+	AND yearid != 1994), 2)
+FROM (
+SELECT yearid, w, wswin
+FROM teams
+WHERE yearid BETWEEN 1970 AND 2016 AND yearid != 1994
+) AS t
+WHERE
+wswin = 'Y' AND
+w = (SELECT MAX(w) 
+	 FROM teams WHERE yearid = t.yearid AND yearid != 1994);
+
+-- About 26% of the time. There was no World Series in 1994 due to a strike.
 
 -- 6. Which managers have won the TSN Manager of the Year award in both the National League (NL) and the American League (AL)? Give their full name and the teams that they were managing when they won the award.
+
+SELECT *
+FROM awardsmanagers
+WHERE
+awardsmanagers.awardid = 'TSN Manager of the Year' AND
+awardsmanagers.lgid IN ('NL', 'AL');
+
+SELECT DISTINCT
+people.namefirst,
+people.namelast,
+yearid
+FROM awardsmanagers
+INNER JOIN people 
+ON awardsmanagers.playerid = people.playerid
+WHERE
+awardsmanagers.awardid = 'TSN Manager of the Year' AND
+awardsmanagers.lgid IN ('NL', 'AL')
+ORDER BY yearid;
+
+SELECT DISTINCT
+people.namefirst,
+people.namelast,
+teams.name AS team_name,
+awardsmanagers.yearid
+FROM awardsmanagers
+INNER JOIN managers 
+	ON awardsmanagers.playerid = managers.playerid
+INNER JOIN teams 
+	ON managers.teamid = teams.teamid
+INNER JOIN people 
+	ON awardsmanagers.playerid = people.playerid
+WHERE
+awardsmanagers.awardid = 'TSN Manager of the Year' AND
+awardsmanagers.lgid IN ('NL', 'AL') AND
+awardsmanagers.yearid = managers.yearid
+ORDER BY
+awardsmanagers.yearid;
+
 
 -- 7. Which pitcher was the least efficient in 2016 in terms of salary / strikeouts? Only consider pitchers who started at least 10 games (across all teams). Note that pitchers often play for more than one team in a season, so be sure that you are counting all stats for each player.
 
@@ -63,3 +159,6 @@ FROM (
 
 
 -- 13. It is thought that since left-handed pitchers are more rare, causing batters to face them less often, that they are more effective. Investigate this claim and present evidence to either support or dispute this claim. First, determine just how rare left-handed pitchers are compared with right-handed pitchers. Are left-handed pitchers more likely to win the Cy Young Award? Are they more likely to make it into the hall of fame?
+
+SELECT *
+FROM teams;
